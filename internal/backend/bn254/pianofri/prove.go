@@ -138,22 +138,7 @@ func Prove(spr *cs.SparseR1CS, pk *ProvingKey, fullWitness bn254witness.Witness,
 		return nil, err
 	}
 
-	var dataFiatShamir [][]byte
-	for _, pp := range proof.LROpp[0] {
-		tmp := make([]byte, len(pp.ID))
-		copy(tmp, pp.ID)
-		dataFiatShamir = append(dataFiatShamir, tmp)
-	}
-	for _, pp := range proof.LROpp[1] {
-		tmp := make([]byte, len(pp.ID))
-		copy(tmp, pp.ID)
-		dataFiatShamir = append(dataFiatShamir, tmp)
-	}
-	for _, pp := range proof.LROpp[2] {
-		tmp := make([]byte, len(pp.ID))
-		copy(tmp, pp.ID)
-		dataFiatShamir = append(dataFiatShamir, tmp)
-	}
+	dataFiatShamir := deriveDataFiatShamir(append(append(proof.LROpp[0], proof.LROpp[1]...), proof.LROpp[2]...)...)
 
 	gamma, err := deriveRandomness(&fs, "gamma", false, dataFiatShamir...)
 	if err != nil {
@@ -191,15 +176,6 @@ func Prove(spr *cs.SparseR1CS, pk *ProvingKey, fullWitness bn254witness.Witness,
 	}
 
 	// commit to z
-	// note that we explicitly double the number of tasks for the multi exp
-	// in dkzg.Commit
-	// this may add additional arithmetic operations, but with smaller tasks
-	// we ensure that this commitment is well parallelized, without having a
-	// "unbalanced task" making the rest of the code wait too long
-	//if proof.Z, err = dkzg.Commit(zCanonicalX, pk.Vk.DKZGSRS, runtime.NumCPU()*2); err != nil {
-	//	return nil, err
-	//}
-
 	if proof.Zpp, err = dfriCommit(zCanonicalX, pk.Vk.Iopp); err != nil {
 		return nil, err
 	}
@@ -210,14 +186,7 @@ func Prove(spr *cs.SparseR1CS, pk *ProvingKey, fullWitness bn254witness.Witness,
 		}
 	}
 
-	dataFiatShamir = make([][]byte, 0, len(proof.Zpp)+1)
-	for _, pp := range proof.Zpp {
-		tmp := make([]byte, len(pp.ID))
-		copy(tmp, pp.ID)
-		dataFiatShamir = append(dataFiatShamir, tmp)
-	}
-	tmp := make([]byte, len(proof.Wpp.ID))
-	dataFiatShamir = append(dataFiatShamir, tmp)
+	dataFiatShamir = deriveDataFiatShamir(append(proof.Zpp, proof.Wpp)...)
 
 	// derive lambda from the Comm(L), Comm(R), Comm(O), Com(Z)
 	lambda, err := deriveRandomness(&fs, "lambda", false, dataFiatShamir...)
@@ -235,7 +204,7 @@ func Prove(spr *cs.SparseR1CS, pk *ProvingKey, fullWitness bn254witness.Witness,
 	}
 
 	// derive alpha
-	alpha, err := deriveRandomness(&fs, "alpha", false, &proof.Hx[0], &proof.Hx[1], &proof.Hx[2], &proof.Hx[3])
+	alpha, err := deriveRandomness(&fs, "alpha", false, deriveDataFiatShamir(append(append(append(proof.Hxpp[0], proof.Hxpp[1]...), proof.Hxpp[2]...), proof.Hxpp[3]...)...)...)
 	if err != nil {
 		return nil, err
 	}
@@ -325,13 +294,13 @@ func Prove(spr *cs.SparseR1CS, pk *ProvingKey, fullWitness bn254witness.Witness,
 	// Batch open the first list of polynomials
 	var evalsXOnAlpha [][]fr.Element
 	// TODO(dhruv): Batch Open all the fri commitments at a single point.
-	//proof.PartialBatchedProof, evalsXOnAlpha, err = dkzg.BatchOpenSinglePoint(
-	//	dkzgOpeningPolys,
-	//	dkzgDigests,
-	//	alpha,
-	//	hFunc,
-	//	pk.Vk.DKZGSRS,
-	//)
+	proof.PartialBatchedProof, evalsXOnAlpha, err = dkzg.BatchOpenSinglePoint(
+		dkzgOpeningPolys,
+		dkzgDigests,
+		alpha,
+		hFunc,
+		pk.Vk.DKZGSRS,
+	)
 
 	if err != nil {
 		return nil, err
@@ -1272,4 +1241,15 @@ func dfriCommit(p []fr.Element, iopp fri.Iopp) ([]fri.ProofOfProximity, error) {
 	}
 
 	return resp, nil
+}
+
+func deriveDataFiatShamir(pps ...fri.ProofOfProximity) [][]byte {
+	var dataFiatShamir [][]byte
+	for _, pp := range pps {
+		tmp := make([]byte, len(pp.ID))
+		copy(tmp, pp.ID)
+		dataFiatShamir = append(dataFiatShamir, tmp)
+	}
+
+	return dataFiatShamir
 }
